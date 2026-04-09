@@ -28,13 +28,12 @@ async def run_agent_phase(
     append_system_prompt: Optional[str] = None,
 ) -> str:
     """
-    Generic function to execute a single phase of the pipeline.
-    Utilizes query() as each phase operates in an independent session.
+    Execute a single phase of the pipeline using Claude Agent SDK.
+    If ResultMessage.result is empty, fall back to the last assistant message.
     """
 
     console.rule(f"[bold cyan]{title}")
 
-    # Use 'claude_code' preset and append extra instructions if provided
     system_prompt = {"type": "preset", "preset": "claude_code"}
     if append_system_prompt:
         system_prompt = {
@@ -48,20 +47,23 @@ async def run_agent_phase(
         allowed_tools=allowed_tools,
         permission_mode=permission_mode,
         max_turns=max_turns,
-        max_budget_usd=2.0,  # Safety cap for testing
+        max_budget_usd=2.0,
         system_prompt=system_prompt,
-        setting_sources=["project"],  # Ensures CLAUDE.md and skills are loaded
+        setting_sources=["project"],
     )
 
     final_result = ""
+    last_assistant_text = ""
 
     async for message in query(prompt=prompt, options=options):
-        # Handle Claude responses and tool calls
         if isinstance(message, AssistantMessage):
+            current_text_parts = []
+
             for block in message.content:
                 if isinstance(block, TextBlock):
                     text = block.text.strip()
                     if text:
+                        current_text_parts.append(text)
                         console.print(
                             Panel(
                                 text[:4000],
@@ -76,12 +78,14 @@ async def run_agent_phase(
                     )
 
                 elif isinstance(block, ToolResultBlock):
-                    console.print("[green]Tool Execution Finished[/green]")
+                    console.print("[green]Tool finished[/green]")
 
-        # Handle final result message
+            if current_text_parts:
+                last_assistant_text = "\n\n".join(current_text_parts)
+
         elif isinstance(message, ResultMessage):
             if message.subtype == "success":
-                final_result = message.result or ""
+                final_result = (message.result or "").strip()
                 console.print(
                     f"[bold green]Success[/bold green] | turns={message.num_turns} | cost=${message.total_cost_usd}"
                 )
@@ -90,11 +94,12 @@ async def run_agent_phase(
                     f"[bold red]Phase ended with subtype={message.subtype}[/bold red]"
                 )
 
+    # Fallback: if ResultMessage.result is empty, use the last assistant text
+    if not final_result and last_assistant_text:
+        final_result = last_assistant_text
+
     return final_result
 
 
 def run_phase_sync(**kwargs) -> str:
-    """
-    Synchronous wrapper to call the async phase function from pipeline.py.
-    """
     return asyncio.run(run_agent_phase(**kwargs))

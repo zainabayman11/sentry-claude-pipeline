@@ -3,7 +3,7 @@
     "cluster_id": "cluster-db-cursor-001",
     "title": "Database cursor leak in sync job",
     "priority": "P1",
-    "projects": ["odoo-backend"],
+    "projects": ["demo-odoo-backend"],
     "issue_ids": ["ODOO-BE-412", "ODOO-BE-413"]
   },
   "common_patterns": {
@@ -40,7 +40,7 @@
     }
   ],
   "code_hints": {
-    "repo": "D:/freelancing/odoo-backend",
+    "repo": "D:/freelancing/demo-odoo-backend",
     "module": "addons/sync",
     "files": ["addons/sync/models/sync_job.py"],
     "search_terms": ["registry.cursor()", "cr.close()", "sync_job.py"]

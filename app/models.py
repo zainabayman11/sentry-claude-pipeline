@@ -1,4 +1,5 @@
 from typing import Any, Dict
+from pathlib import Path
 
 def validate_debug_packet(packet: Dict[str, Any]) -> None:
     """
@@ -38,3 +39,22 @@ def validate_debug_packet(packet: Dict[str, Any]) -> None:
 
     if not packet["code_hints"]["files"]:
         raise ValueError("code_hints.files must not be empty")
+
+
+def validate_source_files_exist(packet: Dict[str, Any]) -> None:
+    """
+    Verify that all source files referenced in code_hints exist on disk.
+    Raises FileNotFoundError with a list of missing files.
+    """
+    repo_path = Path(packet["code_hints"]["repo"])
+    missing = []
+
+    for rel_file in packet["code_hints"]["files"]:
+        full_path = repo_path / rel_file
+        if not full_path.exists():
+            missing.append(str(full_path))
+
+    if missing:
+        raise FileNotFoundError(
+            "Missing source files:\n" + "\n".join(missing)
+        )

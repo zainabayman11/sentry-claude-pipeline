@@ -1,4 +1,4 @@
-I now have enough context. Here is the full review.
+I now have a full picture of all changes. Here is the complete review:
 
 ---
 
@@ -8,102 +8,106 @@ I now have enough context. Here is the full review.
 
 ### 1. Does the fix address the likely root cause?
 
-**Yes — but the fix was never applied.**
+**Partially — the plan is correct but the Odoo fix was never applied.**
 
-The root cause diagnosis is correct: `SyncJob.run()` opens `cr = registry.cursor()` and only calls `cr.close()` on the success path. An exception in `_process_batch()` at line 148 exits the frame without closing the cursor, leaking a connection. Under load, this exhausts PostgreSQL's `max_connections`.
+The root cause diagnosis is accurate: `SyncJob.run()` opens `cr = registry.cursor()` without a `try/finally`, so any exception in `_process_batch()` skips `cr.close()` and leaks a Postgres connection. The proposed `try/except/finally` pattern is the correct Odoo-idiomatic fix.
 
-The planned fix (wrapping in `try/finally` to guarantee `cr.close()`) is the right and idiomatic Odoo solution.
-
-**Critical gap:** the execution agent correctly stopped because `addons/sync/models/sync_job.py` does not exist inside the worktree. The worktree was created from `sentry-claude-pipeline` (the pipeline tool repo), not from `demo-odoo-backend` (the target Odoo repo). **No code was changed.** The pipeline itself has a bug in `pipeline.py` — `create_worktree` is called with the pipeline's own `repo_path` when it should use `packet["code_hints"]["repo"]` pointing to `demo-odoo-backend`.
+**Critical gap:** the only commit (`d7930ea`) adds `debug_packet.json`, `plan.md`, and `pr_draft.md` to the worktree — **no source file in `demo-odoo-backend` was touched.** The execution agent ran in `sentry-claude-pipeline`'s own worktree instead of the `demo-odoo-backend` repo. The Odoo file `addons/sync/models/sync_job.py` remains unchanged.
 
 ---
 
 ### 2. Obvious gaps and edge cases
 
-| Gap | Severity |
-|---|---|
-| Fix not applied — worktree created from wrong repo | **Blocker** |
-| `cr.rollback()` itself can raise (e.g., on a broken connection) — not handled | Low (Odoo's `sql_db` is tolerant, but worth noting) |
-| `_process_batch` may open sub-cursors of its own — not reviewed | Unknown — needs inspection |
-| T-2 ("replace simulated stub") is vague — no concrete code shown | Medium — leaves ambiguity for the executor |
-| No mention of savepoints if `_process_batch` needs partial rollback | Out of scope for this P1, acceptable |
+| # | Gap | Severity |
+|---|-----|----------|
+| 1 | **Fix not applied** — `sync_job.py` unchanged | **Blocker** |
+| 2 | Pipeline bug: `create_worktree` is called from the pipeline repo root, not from `demo-odoo-backend`; the execution agent wrote into the wrong directory | **Blocker** |
+| 3 | `run_git_command` now captures stdout/stderr but callers never inspect it — silent failures remain possible | Low |
+| 4 | `commit_and_push_worktree` uses `git push` without `capture_output=True` (inconsistent with the rest of `run_git_command`) | Low |
+| 5 | `_process_batch` stub behaviour (always raises) not addressed — the underlying logic still needs implementing | Medium |
+| 6 | No mention of `savepoints` if batch processing needs partial rollback | Out of scope / acceptable |
 
 ---
 
 ### 3. Are the changes minimal enough?
 
-The **planned** change is minimal — one method, two structural changes (add `try/except/finally`, add `cr.rollback()` on failure). Nothing else touched.
+The **pipeline** changes (`claude_runner.py`, `git_ops.py`, `pipeline.py`) are reasonable clean-ups (fallback for empty `ResultMessage.result`, `commit_and_push_worktree`, `ensure_source_files_exist`, multi-command CLI). They are well-scoped, though they go slightly beyond the immediate bug fix and belong in a separate PR.
 
-The pipeline infrastructure files (`claude_runner.py`, `git_ops.py`, `pipeline.py`) were also modified, but those changes are unrelated to the Odoo fix and appear to be pipeline improvements (fallback for empty `ResultMessage.result`, worktree existence check, `ensure_source_files_exist` guard). These are clean and well-scoped.
+The worktree commit is over-scoped in the wrong direction: it committed orchestration files (`plan.md`, `pr_draft.md`, `debug_packet.json`) into the target repo worktree, which pollutes it with pipeline artefacts.
 
 ---
 
 ### 4. Tests still missing
 
-- **Regression test** simulating an exception in `_process_batch` — asserts `cr.close()` is called exactly once (via mock or a test-double registry).
-- **Test** verifying `cr.rollback()` is called on failure, not `cr.commit()`.
-- **Test** for the happy path: `cr.commit()` called, `cr.close()` called, no rollback.
-- No tests were added in this cycle. The plan does not mention tests at all — a gap for a P1 fix.
+- Unit test: mock `_process_batch` to raise → assert `cr.close()` called, `cr.rollback()` called, `cr.commit()` **not** called.
+- Unit test: happy path → assert `cr.commit()` and `cr.close()` each called exactly once.
+- Integration/smoke test: trigger a real sync job that raises mid-batch; verify no connection growth in `pg_stat_activity`.
+- The plan mentions no tests at all — a gap for a P1 fix.
 
 ---
 
-### 5. PR Body (draft)
+### 5. Final PR Body (draft)
 
 ```markdown
 ## fix: close DB cursor on exception in SyncJob.run (ODOO-BE-412, ODOO-BE-413)
 
 ### Root cause
 
-`SyncJob.run()` opened a cursor with `registry.cursor()` but only called
-`cr.close()` on the success path. Any exception raised inside `_process_batch()`
-caused the cursor to leak. Under sustained load this exhausted PostgreSQL's
-`max_connections`, producing:
+`SyncJob.run()` opened a cursor with `self.env.registry.cursor()` but only
+called `cr.close()` on the success path. Any exception raised inside
+`_process_batch()` caused the cursor to leak, exhausting PostgreSQL's
+`max_connections` under sustained failures:
 
-```
-OperationalError: too many clients already
-```
+    OperationalError: too many clients already
 
-Sentry traces: [ODOO-BE-412](https://sentry.example/issue/412) · [ODOO-BE-413](https://sentry.example/issue/413)
+Sentry: ODOO-BE-412 · ODOO-BE-413
 
 ### Fix
 
-Wrapped the cursor lifecycle in `try/except/finally` so `cr.close()` is
-**always** executed, and `cr.rollback()` is called before re-raising to discard
-partial writes:
+Wrapped the cursor lifecycle in `try/except/finally`:
 
 ```python
 def run(self):
-    cr = self.registry.cursor()
+    cr = self.env.registry.cursor()
     try:
         self._process_batch(cr)
         cr.commit()
     except Exception:
-        cr.rollback()
+        cr.rollback()   # discard partial writes
         raise
     finally:
-        cr.close()
+        cr.close()      # guaranteed on every code path
 ```
 
-Change is confined to `addons/sync/models/sync_job.py` — one method, no
-interface changes.
+Change is confined to `addons/sync/models/sync_job.py` — one method,
+no interface or schema changes.
 
-### Testing
+### Tests
 
-- [ ] Manually trigger a sync job that raises mid-batch; verify connection count
-      does not climb in `pg_stat_activity`.
-- [ ] Unit test: mock `_process_batch` to raise; assert `cr.close()` called and
-      `cr.commit()` not called.
-- [ ] Unit test: happy path — `cr.commit()` and `cr.close()` both called.
+- [ ] Unit: mock `_process_batch` to raise → `cr.close()` called,
+      `cr.commit()` NOT called, `cr.rollback()` called.
+- [ ] Unit: happy path → `cr.commit()` and `cr.close()` each called once.
+- [ ] Manual: trigger sync job with failing batch; confirm
+      `pg_stat_activity` connection count does not climb.
 
 ### Notes
 
 - No Odoo core files modified.
-- `_process_batch` sub-cursor usage should be audited in a follow-up if batch
-  sizes remain large.
+- `_process_batch` sub-cursor usage should be audited in a follow-up
+  if batch sizes remain large.
+
+Fixes: ODOO-BE-412, ODOO-BE-413
 ```
 
 ---
 
 ### Summary verdict
 
-The diagnosis and plan are sound. The fix itself was **not applied** due to a pipeline misconfiguration (worktree points to the wrong repo). Before pushing, the worktree must be recreated from `demo-odoo-backend`, the fix applied, and at minimum a mock-based regression test added.
+| Question | Answer |
+|---|---|
+| Fix addresses root cause? | Plan yes; code **not applied** (blocker) |
+| Gaps / edge cases? | Pipeline creates worktree in wrong repo |
+| Changes minimal? | Pipeline changes are clean but belong in a separate PR; worktree polluted with artefacts |
+| Tests missing? | All regression tests (none were added) |
+
+**Before pushing:** recreate the worktree from `demo-odoo-backend`, apply the `try/except/finally` fix to `sync_job.py`, add at least the two unit tests, then remove `plan.md`/`pr_draft.md`/`debug_packet.json` from the target repo's worktree.
