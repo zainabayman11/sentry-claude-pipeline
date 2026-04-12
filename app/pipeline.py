@@ -1,11 +1,13 @@
+import asyncio
 import json
 import sys
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from rich.console import Console
 from rich.panel import Panel
 
-from app.models import validate_debug_packet, validate_source_files_exist
+from app.models import validate_debug_packet, validate_source_files_exist, load_packets
 from app.memory_store import find_similar_incident, append_memory_record
 from app.git_ops import create_worktree, commit_and_push_worktree, create_github_pr
 from app.prompts import planning_prompt, execution_prompt, review_prompt
@@ -46,35 +48,8 @@ def _save_meta(meta_file: Path, data: dict) -> None:
     write_text_file(meta_file, json.dumps(data, indent=2))
 
 
-def ensure_source_files_exist(packet: dict) -> None:
-    repo_path = Path(packet["code_hints"]["repo"])
-    missing = []
-    for rel_file in packet["code_hints"]["files"]:
-        full_path = repo_path / rel_file
-        if not full_path.exists():
-            missing.append(str(full_path))
-    if missing:
-        raise FileNotFoundError("Missing source files:\n" + "\n".join(missing))
-
-
-def main():
-    if len(sys.argv) < 3:
-        console.print(
-            "[red]Usage:[/red] python -m app.pipeline <plan|execute|review|push|memory> data/sample_debug_packet.json"
-        )
-        sys.exit(1)
-
-    command = sys.argv[1]
-    packet_path = Path(sys.argv[2])
-
-    if not packet_path.exists():
-        console.print(f"[red]Packet file not found:[/red] {packet_path}")
-        sys.exit(1)
-
-    console.rule("[bold magenta]Claude Bug Pipeline")
-
-    packet = json.loads(read_text_file(packet_path))
-    validate_debug_packet(packet)
+def run_cluster(command: str, packet: dict) -> None:
+    """Run a single pipeline command against one cluster packet."""
 
     cluster_id = packet["summary"]["cluster_id"]
     repo_path = Path(packet["code_hints"]["repo"])
@@ -121,7 +96,7 @@ def main():
 
     elif command == "execute":
         if not plan_file.exists():
-            raise FileNotFoundError("Plan file not found. Run plan first.")
+            raise FileNotFoundError(f"[{cluster_id}] Plan file not found. Run plan first.")
 
         state_dir.mkdir(parents=True, exist_ok=True)
         meta = _load_meta(meta_file) if meta_file.exists() else {}
@@ -133,7 +108,6 @@ def main():
         write_text_file(worktree / "debug_packet.json", json.dumps(packet, indent=2, ensure_ascii=False))
         write_text_file(worktree / "plan.md", require_file(plan_file, "Plan"))
 
-        # Resume previous execute session if interrupted
         resume_id = meta.get("sessions", {}).get("execute_resume")
 
         execution_result, session_id = run_phase_sync(
@@ -157,14 +131,13 @@ def main():
         console.print(f"[green]✓ Execution done:[/green] {execution_file}")
 
     elif command == "resume-execute":
-        # Resume an interrupted execute phase
         if not meta_file.exists():
-            raise FileNotFoundError("No meta file found. Run execute first.")
+            raise FileNotFoundError(f"[{cluster_id}] No meta file found. Run execute first.")
 
         meta = _load_meta(meta_file)
         execute_session = meta.get("sessions", {}).get("execute")
         if not execute_session:
-            raise ValueError("No execute session ID found to resume.")
+            raise ValueError(f"[{cluster_id}] No execute session ID found to resume.")
 
         meta.setdefault("sessions", {})["execute_resume"] = execute_session
         _save_meta(meta_file, meta)
@@ -172,7 +145,7 @@ def main():
 
     elif command == "review":
         if not meta_file.exists():
-            raise FileNotFoundError("Execution metadata not found. Run execute first.")
+            raise FileNotFoundError(f"[{cluster_id}] Execution metadata not found. Run execute first.")
 
         meta = _load_meta(meta_file)
         worktree_path = meta["worktree_path"]
@@ -198,7 +171,7 @@ def main():
 
     elif command == "push":
         if not review_file.exists():
-            raise FileNotFoundError("Review file not found. Run review first.")
+            raise FileNotFoundError(f"[{cluster_id}] Review file not found. Run review first.")
 
         meta = _load_meta(meta_file)
         worktree_path = meta["worktree_path"]
@@ -226,22 +199,152 @@ def main():
         )
 
         append_memory_record(packet, require_file(execution_file, "Execution"))
-        console.print("[green]✓ PR created and memory updated[/green]")
+        console.print(f"[green]✓ PR created and memory updated:[/green] {cluster_id}")
 
     elif command == "memory":
         if not execution_file.exists():
-            raise FileNotFoundError("Execution summary not found. Run execute first.")
+            raise FileNotFoundError(f"[{cluster_id}] Execution summary not found. Run execute first.")
         if not review_file.exists():
-            raise FileNotFoundError("Review file not found. Run review first.")
+            raise FileNotFoundError(f"[{cluster_id}] Review file not found. Run review first.")
 
         execution_summary = require_file(execution_file, "Execution")
         append_memory_record(packet, execution_summary)
-        console.print("[green]✓ Memory updated with execution summary[/green]")
+        console.print(f"[green]✓ Memory updated:[/green] {cluster_id}")
 
     else:
         console.print(f"[red]Unknown command:[/red] {command}")
         console.print("Valid commands: plan, execute, review, push, memory, resume-execute")
         sys.exit(1)
+
+
+def _run_cluster_safe(command: str, packet: dict) -> tuple[str, Exception | None]:
+    """Wrapper for parallel execution — returns (cluster_id, error or None)."""
+    cluster_id = packet["summary"]["cluster_id"]
+    try:
+        run_cluster(command, packet)
+        return cluster_id, None
+    except Exception as e:
+        return cluster_id, e
+
+
+def main():
+    if len(sys.argv) < 3:
+        console.print("[red]Usage:[/red] python -m app.pipeline <command> data/packet.json [options]")
+        console.print("")
+        console.print("[bold]Commands:[/bold]")
+        console.print("  plan            Analyze bug and produce fix plan (read-only)")
+        console.print("  execute         Implement the fix in an isolated worktree")
+        console.print("  review          Review the changes (read-only)")
+        console.print("  push            Commit, push branch, open GitHub PR")
+        console.print("  memory          Save fix to memory without pushing")
+        console.print("  resume-execute  Resume an interrupted execute phase")
+        console.print("")
+        console.print("[bold]Options:[/bold]")
+        console.print("  --limit N     Process only N clusters (default: all)")
+        console.print("  --offset N    Skip first N clusters (default: 0)")
+        console.print("  --parallel    Run clusters in parallel (default: sequential)")
+        console.print("")
+        console.print("[bold]Examples:[/bold]")
+        console.print("  # Run plan on all clusters")
+        console.print("  python -m app.pipeline plan data/bugs.json")
+        console.print("")
+        console.print("  # Run plan on first 5 clusters only")
+        console.print("  python -m app.pipeline plan data/bugs.json --limit 5")
+        console.print("")
+        console.print("  # Run plan on clusters 6-10 (second batch)")
+        console.print("  python -m app.pipeline plan data/bugs.json --limit 5 --offset 5")
+        console.print("")
+        console.print("  # Run plan on a single cluster (index 0)")
+        console.print("  python -m app.pipeline plan data/bugs.json --limit 1 --offset 0")
+        console.print("")
+        console.print("  # Run plan on first 3 clusters in parallel")
+        console.print("  python -m app.pipeline plan data/bugs.json --limit 3 --parallel")
+        sys.exit(1)
+
+    command = sys.argv[1]
+    packet_path = Path(sys.argv[2])
+
+    # Parse options
+    args = sys.argv[3:]
+    limit = None
+    offset = 0
+    parallel = "--parallel" in args
+
+    try:
+        if "--limit" in args:
+            limit = int(args[args.index("--limit") + 1])
+        if "--offset" in args:
+            offset = int(args[args.index("--offset") + 1])
+    except (ValueError, IndexError):
+        console.print("[red]Invalid --limit or --offset value[/red]")
+        sys.exit(1)
+
+    if not packet_path.exists():
+        console.print(f"[red]Packet file not found:[/red] {packet_path}")
+        sys.exit(1)
+
+    console.rule("[bold magenta]Claude Bug Pipeline")
+
+    raw = json.loads(read_text_file(packet_path))
+    packets = load_packets(raw)
+
+    # Apply offset and limit
+    packets = packets[offset:]
+    if limit is not None:
+        packets = packets[:limit]
+
+    # Validate all selected packets upfront before starting anything
+    for packet in packets:
+        validate_debug_packet(packet)
+
+    total = len(packets)
+    failed = []
+
+    mode_label = "[yellow]parallel[/yellow]" if parallel else "[cyan]sequential[/cyan]"
+    console.print(f"Running [bold]{command}[/bold] on [bold]{total}[/bold] cluster(s) — {mode_label}")
+
+    if parallel and total > 1:
+        # Parallel: all clusters run at the same time via threads
+        # Warning: may hit rate limits for > 5 clusters on Claude Max
+        with ThreadPoolExecutor(max_workers=total) as executor:
+            futures = {
+                executor.submit(_run_cluster_safe, command, packet): packet
+                for packet in packets
+            }
+            for future in as_completed(futures):
+                cluster_id, error = future.result()
+                if error:
+                    console.print(Panel(
+                        str(error),
+                        title=f"[bold red]Failed: {cluster_id}",
+                        border_style="red",
+                    ))
+                    failed.append(cluster_id)
+                else:
+                    console.print(f"[green]✓ Done:[/green] {cluster_id}")
+    else:
+        # Sequential: one cluster at a time
+        for i, packet in enumerate(packets, 1):
+            cluster_id = packet["summary"]["cluster_id"]
+            console.rule(f"[bold cyan]Cluster {i}/{total} — {cluster_id}")
+            try:
+                run_cluster(command, packet)
+            except Exception as e:
+                console.print(Panel(
+                    str(e),
+                    title=f"[bold red]Failed: {cluster_id}",
+                    border_style="red",
+                ))
+                failed.append(cluster_id)
+                continue
+
+    # Summary (only when more than 1 cluster)
+    if total > 1:
+        console.rule("[bold magenta]Done")
+        done = total - len(failed)
+        console.print(f"[green]✓ {done}/{total} clusters succeeded[/green]")
+        if failed:
+            console.print(f"[red]✗ Failed: {', '.join(failed)}[/red]")
 
 
 if __name__ == "__main__":
