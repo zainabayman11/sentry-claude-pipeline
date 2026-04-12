@@ -1,0 +1,54 @@
+[
+  {
+    "summary": {
+      "cluster_id": "cluster-db-cursor-001",
+      "title": "Database cursor leak in sync job",
+      "priority": "P1",
+      "projects": ["demo-odoo-backend"],
+      "issue_ids": ["ODOO-BE-412", "ODOO-BE-413"]
+    },
+    "common_patterns": {
+      "platform": "python",
+      "error_type": "OperationalError",
+      "exc_module": "sql_db",
+      "location": "addons/sync/models/sync_job.py",
+      "environment": "production",
+      "release": "18.0.3"
+    },
+    "diagnostic_context": {
+      "primary_error_message": "OperationalError: too many clients already",
+      "culprit": "addons.sync.models.sync_job.run",
+      "transaction": "/sync/run",
+      "logger": "odoo.sql_db"
+    },
+    "representative_traces": [
+      {
+        "issue_id": "ODOO-BE-412",
+        "stack_trace": [
+          {
+            "file": "addons/sync/models/sync_job.py",
+            "line": 123,
+            "function": "run",
+            "context": "cr = registry.cursor()"
+          },
+          {
+            "file": "addons/sync/models/sync_job.py",
+            "line": 148,
+            "function": "process_batch",
+            "context": "exception raised before close"
+          }
+        ]
+      }
+    ],
+    "code_hints": {
+      "repo": "D:/freelancing/demo-odoo-backend",
+      "module": "addons/sync",
+      "files": ["addons/sync/models/sync_job.py"],
+      "search_terms": ["registry.cursor()", "cr.close()", "sync_job.py"]
+    },
+    "sentry_links": [
+      "https://sentry.example/issue/412",
+      "https://sentry.example/issue/413"
+    ]
+  }
+]
