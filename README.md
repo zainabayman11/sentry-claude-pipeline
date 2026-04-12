@@ -78,6 +78,8 @@ Start with an empty array `[]` — the pipeline fills it automatically after eac
 
 ## Usage
 
+### Single Cluster (Legacy)
+
 Run each phase in order for a single cluster:
 
 ```bash
@@ -99,6 +101,101 @@ python -m app.pipeline memory data/your_cluster.json
 # Optional: resume an interrupted execute phase
 python -m app.pipeline resume-execute data/your_cluster.json
 ```
+
+### Multiple Clusters (Array Mode) — Recommended
+
+For batch processing, use an array of clusters in a single JSON file:
+
+```json
+{
+  "clusters": [
+    { "summary": {...}, ...},
+    { "summary": {...}, ...},
+    ...
+  ]
+}
+```
+
+Then run with batch options:
+
+#### Process All Clusters Sequentially
+```bash
+python -m app.pipeline plan data/bugs.json
+```
+
+#### Process First N Clusters
+```bash
+# Process only the first 5 clusters
+python -m app.pipeline plan data/bugs.json --limit 5
+```
+
+#### Process with Offset (Batch Mode)
+```bash
+# First batch: clusters 0-4
+python -m app.pipeline plan data/bugs.json --limit 5 --offset 0
+
+# Second batch: clusters 5-9
+python -m app.pipeline plan data/bugs.json --limit 5 --offset 5
+
+# Batch 3: clusters 10-14
+python -m app.pipeline plan data/bugs.json --limit 5 --offset 10
+```
+
+#### Process Single Cluster by Index
+```bash
+# Process only cluster at index 2 (3rd cluster)
+python -m app.pipeline plan data/bugs.json --limit 1 --offset 2
+```
+
+#### Full Example: 15 Bugs (3 Batches of 5)
+```bash
+# Batch 1: Plan clusters 0-4
+python -m app.pipeline plan data/bugs.json --limit 5 --offset 0
+
+# Batch 1: Execute clusters 0-4
+python -m app.pipeline execute data/bugs.json --limit 5 --offset 0
+
+# Batch 1: Review + Push clusters 0-4
+python -m app.pipeline review data/bugs.json --limit 5 --offset 0
+python -m app.pipeline push data/bugs.json --limit 5 --offset 0
+
+# Batch 2: Plan clusters 5-9
+python -m app.pipeline plan data/bugs.json --limit 5 --offset 5
+
+# ... and so on
+```
+
+#### Full Automated Run (All Clusters)
+```bash
+# Plan all
+python -m app.pipeline plan data/bugs.json
+
+# Execute all
+python -m app.pipeline execute data/bugs.json
+
+# Review all
+python -m app.pipeline review data/bugs.json
+
+# Push all
+python -m app.pipeline push data/bugs.json
+```
+
+---
+
+### Command Options Reference
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `--limit N` | Process only the first N clusters | `--limit 5` |
+| `--offset M` | Skip first M clusters, start from M | `--offset 5` |
+| `--limit N --offset M` | Process N clusters starting from index M (batch mode) | `--limit 5 --offset 10` |
+
+**Important**:
+- `--limit` and `--offset` only work with array-format JSON files (clusters array)
+- Sequential processing is the default — clusters are processed one at a time, waiting for completion
+- For 10+ daily bugs, use batching to avoid long-running processes:
+  - Run each phase (plan, execute, review, push) separately
+  - Use `--limit` and `--offset` to process in smaller batches
 
 ---
 
