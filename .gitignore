@@ -44,4 +44,6 @@ env/
 
 # Project specific
 .pipeline_state/
+worktrees/
 *.log
+memory/incidents.json

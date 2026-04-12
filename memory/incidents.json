@@ -1,1 +1,12 @@
-[]
+[
+  {
+    "id": "cluster-db-cursor-001",
+    "signature": "python|OperationalError|sql_db|addons/sync/models/sync_job.py|18.0.3",
+    "title": "Database cursor leak in sync job",
+    "root_cause_hint": "OperationalError: too many clients already",
+    "accepted_fix_summary": "---\n\n## Execution Summary\n\n**Bug:** `SyncJob.run()` called `cr.close()` only on the success path. Any exception in `_process_batch` leaked the cursor, exhausting the PostgreSQL connection pool → `OperationalError: too many clients already`.\n\n**Fix applied** (`addons/sync/models/sync_job.py`):\n- Moved `cr.close()` into a `finally` block — guaranteed to run regardless of outcome\n- Added `cr.rollback()` in the `except` block before re-raising\n- Changed `self.registry` → `self.env.registry` (Odoo model convention, also required by existing tests)\n- Added `_process_batch` / `_handle_record` with real SQL logic replacing the `raise Exception` stub\n\n**Tests:** All 3 regression tests in `test_sync_job_cursor.py` pass (success path, exception path, no-commit-on-exception).\n\n**Files changed:**\n- `addons/sync/models/sync_job.py` — fix\n- `plan.md` — updated with task completion status\n- `pr_draft.md` — created with full PR body",
+    "files_touched_hint": [
+      "addons/sync/models/sync_job.py"
+    ]
+  }
+]

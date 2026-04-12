@@ -19,7 +19,8 @@ def ensure_git_repo(repo_path: str) -> None:
 def create_worktree(repo_path: str, branch_name: str) -> str:
     ensure_git_repo(repo_path)
 
-    worktrees_root = Path("worktrees")
+    # Worktree must live inside the repo so git path resolution is consistent
+    worktrees_root = Path(repo_path) / "worktrees"
     worktrees_root.mkdir(parents=True, exist_ok=True)
 
     worktree_path = worktrees_root / branch_name
@@ -27,10 +28,23 @@ def create_worktree(repo_path: str, branch_name: str) -> str:
     if worktree_path.exists():
         return str(worktree_path.resolve())
 
-    run_git_command(
-        ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
-        cwd=repo_path,
+    # If branch already exists, attach to it — don't create with -b
+    branch_check = subprocess.run(
+        ["git", "branch", "--list", branch_name],
+        cwd=repo_path, capture_output=True, text=True,
     )
+    branch_exists = bool(branch_check.stdout.strip())
+
+    if branch_exists:
+        run_git_command(
+            ["git", "worktree", "add", str(worktree_path), branch_name],
+            cwd=repo_path,
+        )
+    else:
+        run_git_command(
+            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
+            cwd=repo_path,
+        )
 
     return str(worktree_path.resolve())
 
