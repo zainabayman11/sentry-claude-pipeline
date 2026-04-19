@@ -78,6 +78,8 @@ Start with an empty array `[]` — the pipeline fills it automatically after eac
 
 ## Usage
 
+### Single Cluster (Legacy)
+
 Run each phase in order for a single cluster:
 
 ```bash
@@ -99,6 +101,101 @@ python -m app.pipeline memory data/your_cluster.json
 # Optional: resume an interrupted execute phase
 python -m app.pipeline resume-execute data/your_cluster.json
 ```
+
+### Multiple Clusters (Array Mode) — Recommended
+
+For batch processing, use an array of clusters in a single JSON file:
+
+```json
+{
+  "clusters": [
+    { "summary": {...}, ...},
+    { "summary": {...}, ...},
+    ...
+  ]
+}
+```
+
+Then run with batch options:
+
+#### Process All Clusters Sequentially
+```bash
+python -m app.pipeline plan data/bugs.json
+```
+
+#### Process First N Clusters
+```bash
+# Process only the first 5 clusters
+python -m app.pipeline plan data/bugs.json --limit 5
+```
+
+#### Process with Offset (Batch Mode)
+```bash
+# First batch: clusters 0-4
+python -m app.pipeline plan data/bugs.json --limit 5 --offset 0
+
+# Second batch: clusters 5-9
+python -m app.pipeline plan data/bugs.json --limit 5 --offset 5
+
+# Batch 3: clusters 10-14
+python -m app.pipeline plan data/bugs.json --limit 5 --offset 10
+```
+
+#### Process Single Cluster by Index
+```bash
+# Process only cluster at index 2 (3rd cluster)
+python -m app.pipeline plan data/bugs.json --limit 1 --offset 2
+```
+
+#### Full Example: 15 Bugs (3 Batches of 5)
+```bash
+# Batch 1: Plan clusters 0-4
+python -m app.pipeline plan data/bugs.json --limit 5 --offset 0
+
+# Batch 1: Execute clusters 0-4
+python -m app.pipeline execute data/bugs.json --limit 5 --offset 0
+
+# Batch 1: Review + Push clusters 0-4
+python -m app.pipeline review data/bugs.json --limit 5 --offset 0
+python -m app.pipeline push data/bugs.json --limit 5 --offset 0
+
+# Batch 2: Plan clusters 5-9
+python -m app.pipeline plan data/bugs.json --limit 5 --offset 5
+
+# ... and so on
+```
+
+#### Full Automated Run (All Clusters)
+```bash
+# Plan all
+python -m app.pipeline plan data/bugs.json
+
+# Execute all
+python -m app.pipeline execute data/bugs.json
+
+# Review all
+python -m app.pipeline review data/bugs.json
+
+# Push all
+python -m app.pipeline push data/bugs.json
+```
+
+---
+
+### Command Options Reference
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `--limit N` | Process only the first N clusters | `--limit 5` |
+| `--offset M` | Skip first M clusters, start from M | `--offset 5` |
+| `--limit N --offset M` | Process N clusters starting from index M (batch mode) | `--limit 5 --offset 10` |
+
+**Important**:
+- `--limit` and `--offset` only work with array-format JSON files (clusters array)
+- Sequential processing is the default — clusters are processed one at a time, waiting for completion
+- For 10+ daily bugs, use batching to avoid long-running processes:
+  - Run each phase (plan, execute, review, push) separately
+  - Use `--limit` and `--offset` to process in smaller batches
 
 ---
 
@@ -133,6 +230,83 @@ Next time a similar cluster arrives, the plan phase:
 1. Scores similarity using error type, module, and file location
 2. If score ≥ 0.4, sends past fix as **context** (not a directive) to Claude
 3. Claude decides whether to reuse, adapt, or investigate from scratch
+
+---
+
+## Monitoring
+
+### What's always logged (no setup required)
+
+Every run appends one JSON line to `.pipeline_state/cost_log.jsonl` — local only, git-ignored, never shared.
+
+```json
+{
+  "ts": "2026-04-19T10:00:00+00:00",
+  "run_id": "run_20260419_100000_a3f9c1",
+  "user_id": "zainab",
+  "cluster_id": "cluster-db-cursor-001",
+  "repo_name": "my-repo",
+  "command": "plan",
+  "runner": "agent_sdk",
+  "branch_name": "fix-cluster-db-cursor-001",
+  "memory_hit": false,
+  "success": true,
+  "error_message": null,
+  "phases": [
+    {
+      "phase": "Planning",
+      "status": "success",
+      "duration_sec": 47.3,
+      "prompt_id": "planning:9b4e57191ca0",
+      "prompt_hash": "9b4e57191ca0",
+      "cost_usd": 0.031,
+      "num_turns": 6,
+      "input_tokens": 18432,
+      "output_tokens": 2104,
+      "cache_read_tokens": 14200,
+      "cache_creation_tokens": 0,
+      "tool_counts": { "Read": 4, "Grep": 2 }
+    }
+  ],
+  "total_cost_usd": 0.031
+}
+```
+
+For `push` runs, the phase also includes git metadata:
+```json
+{
+  "phase": "Push",
+  "git_commit_created": true,
+  "git_push_done": true,
+  "pr_created": true,
+  "pr_url": "https://github.com/owner/repo/pull/42",
+  "commit_sha": "abc123def456",
+  "changed_files_count": 2,
+  "branch_pushed": "fix-cluster-db-cursor-001"
+}
+```
+
+If a run fails, the entry is still written with `"success": false` and `"error_message"` set.
+
+### Developer setup (rich terminal panels)
+
+Copy `.env.example` to `.env` and set your name:
+
+```bash
+# Windows
+copy .env.example .env
+
+# macOS / Linux
+cp .env.example .env
+```
+
+Then edit `.env`:
+```
+PIPELINE_USER=yourname
+PIPELINE_VERBOSE=1
+```
+
+With `PIPELINE_VERBOSE=1` you'll see a per-phase cost/token/cache table after each run.
 
 ---
 
@@ -206,5 +380,6 @@ sentry-claude-pipeline/
 │   └── sample_debug_packet.json
 ├── memory/
 │   └── incidents.json
+├── .env.example           # Copy to .env — developer monitoring settings
 └── requirements.txt
 ```

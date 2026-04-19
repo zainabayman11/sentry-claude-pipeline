@@ -50,5 +50,159 @@
       "https://sentry.example/issue/412",
       "https://sentry.example/issue/413"
     ]
+  },
+  {
+    "summary": {
+      "cluster_id": "cluster-access-sudo-002",
+      "title": "Missing sudo() causes AccessError when writing invoice from cron",
+      "priority": "P1",
+      "projects": ["demo-odoo-backend"],
+      "issue_ids": ["ODOO-BE-501"]
+    },
+    "common_patterns": {
+      "platform": "python",
+      "error_type": "AccessError",
+      "exc_module": "base",
+      "location": "addons/account_ext/models/invoice_auto.py",
+      "environment": "production",
+      "release": "18.0.3"
+    },
+    "diagnostic_context": {
+      "primary_error_message": "AccessError: You do not have access to this document. Operation: write, Model: account.move",
+      "culprit": "addons.account_ext.models.invoice_auto._auto_post_invoices",
+      "transaction": "/_cron/auto_post_invoices",
+      "logger": "odoo.models"
+    },
+    "representative_traces": [
+      {
+        "issue_id": "ODOO-BE-501",
+        "stack_trace": [
+          {
+            "file": "addons/account_ext/models/invoice_auto.py",
+            "line": 54,
+            "function": "_auto_post_invoices",
+            "context": "invoices.action_post()"
+          },
+          {
+            "file": "addons/account/models/account_move.py",
+            "line": 2301,
+            "function": "action_post",
+            "context": "self.write({'state': 'posted'})"
+          }
+        ]
+      }
+    ],
+    "code_hints": {
+      "repo": "D:/freelancing/demo-odoo-backend",
+      "module": "addons/account_ext",
+      "files": ["addons/account_ext/models/invoice_auto.py"],
+      "search_terms": ["_auto_post_invoices", "action_post", "sudo()"]
+    },
+    "sentry_links": [
+      "https://sentry.example/issue/501"
+    ]
+  },
+  {
+    "summary": {
+      "cluster_id": "cluster-compute-depends-003",
+      "title": "Computed field not recomputed when dependency changes",
+      "priority": "P2",
+      "projects": ["demo-odoo-backend"],
+      "issue_ids": ["ODOO-BE-620", "ODOO-BE-621"]
+    },
+    "common_patterns": {
+      "platform": "python",
+      "error_type": "ValueError",
+      "exc_module": "fields",
+      "location": "addons/sale_ext/models/sale_order_line.py",
+      "environment": "staging",
+      "release": "18.0.3"
+    },
+    "diagnostic_context": {
+      "primary_error_message": "ValueError: expected singleton, got sale.order.line(1, 2, 3)",
+      "culprit": "addons.sale_ext.models.sale_order_line._compute_margin_pct",
+      "transaction": "/web#action=sale.action_quotations",
+      "logger": "odoo.fields"
+    },
+    "representative_traces": [
+      {
+        "issue_id": "ODOO-BE-620",
+        "stack_trace": [
+          {
+            "file": "addons/sale_ext/models/sale_order_line.py",
+            "line": 87,
+            "function": "_compute_margin_pct",
+            "context": "cost = self.product_id.standard_price"
+          },
+          {
+            "file": "addons/sale_ext/models/sale_order_line.py",
+            "line": 91,
+            "function": "_compute_margin_pct",
+            "context": "self.margin_pct = (self.price_unit - cost) / self.price_unit * 100"
+          }
+        ]
+      }
+    ],
+    "code_hints": {
+      "repo": "D:/freelancing/demo-odoo-backend",
+      "module": "addons/sale_ext",
+      "files": ["addons/sale_ext/models/sale_order_line.py"],
+      "search_terms": ["_compute_margin_pct", "@api.depends", "margin_pct", "standard_price"]
+    },
+    "sentry_links": [
+      "https://sentry.example/issue/620",
+      "https://sentry.example/issue/621"
+    ]
+  },
+  {
+    "summary": {
+      "cluster_id": "cluster-unlink-cascade-004",
+      "title": "unlink() on sale.order bypasses stock move cleanup, leaves orphaned records",
+      "priority": "P2",
+      "projects": ["demo-odoo-backend"],
+      "issue_ids": ["ODOO-BE-703"]
+    },
+    "common_patterns": {
+      "platform": "python",
+      "error_type": "IntegrityError",
+      "exc_module": "psycopg2",
+      "location": "addons/sale_stock_ext/models/sale_order.py",
+      "environment": "production",
+      "release": "18.0.3"
+    },
+    "diagnostic_context": {
+      "primary_error_message": "IntegrityError: null value in column 'sale_line_id' of relation 'stock_move' violates not-null constraint",
+      "culprit": "addons.sale_stock_ext.models.sale_order.unlink",
+      "transaction": "/web/dataset/call_kw/sale.order/unlink",
+      "logger": "odoo.sql_db"
+    },
+    "representative_traces": [
+      {
+        "issue_id": "ODOO-BE-703",
+        "stack_trace": [
+          {
+            "file": "addons/sale_stock_ext/models/sale_order.py",
+            "line": 34,
+            "function": "unlink",
+            "context": "return super().unlink()"
+          },
+          {
+            "file": "addons/stock/models/stock_move.py",
+            "line": 1102,
+            "function": "_action_cancel",
+            "context": "move.sale_line_id.id"
+          }
+        ]
+      }
+    ],
+    "code_hints": {
+      "repo": "D:/freelancing/demo-odoo-backend",
+      "module": "addons/sale_stock_ext",
+      "files": ["addons/sale_stock_ext/models/sale_order.py"],
+      "search_terms": ["def unlink", "stock_move", "sale_line_id", "_action_cancel"]
+    },
+    "sentry_links": [
+      "https://sentry.example/issue/703"
+    ]
   }
 ]

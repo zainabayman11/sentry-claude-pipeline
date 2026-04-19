@@ -63,16 +63,21 @@ Rules:
 - Write pr_draft.md with a suggested PR body."""
 
 
-def review_prompt(packet: Dict[str, Any]) -> str:
+def review_prompt(packet: Dict[str, Any], diff: str = "") -> str:
     summary = packet["summary"]
     ctx = packet["diagnostic_context"]
-    hints = packet["code_hints"]
 
-    return f"""You are in REVIEW mode. Review the fix and draft the PR description.
+    return f"""You are in REVIEW mode. Review the fix below and draft the PR description.
 
 Bug: {summary['title']} ({summary['cluster_id']})
 Error: {ctx['primary_error_message']}
-Files changed: {hints['files']}
+
+Here is the exact diff of what was changed:
+```diff
+{diff}
+```
+
+Review ONLY these changes. Do not explore other files.
 
 Answer briefly:
 1. Does the fix address the root cause?
