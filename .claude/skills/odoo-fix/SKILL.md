@@ -11,3 +11,5 @@ description: Apply safe Odoo-oriented fixes while respecting module boundaries a
 3. Be careful with env.cr, manual cursors, cron jobs, and transaction boundaries.
 4. Add or update tests if possible.
 5. Keep the patch minimal and easy to review.
+
+
