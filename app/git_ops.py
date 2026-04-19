@@ -1,5 +1,14 @@
 import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
+
+
+@dataclass
+class PushResult:
+    commit_created: bool = False
+    push_done: bool = False
+    commit_sha: str = ""
+    changed_files_count: int = 0
 
 
 def run_git_command(args: list[str], cwd: str) -> subprocess.CompletedProcess:
@@ -49,13 +58,22 @@ def create_worktree(repo_path: str, branch_name: str) -> str:
     return str(worktree_path.resolve())
 
 
-def commit_and_push_worktree(worktree_path: str, branch_name: str, commit_message: str) -> None:
+def commit_and_push_worktree(worktree_path: str, branch_name: str, commit_message: str) -> PushResult:
     """
     Stage all changes, commit if staged changes exist, and push to remote.
-    Uses run_git_command consistently for all git operations.
+    Returns a PushResult with git metadata for JSONL logging.
     """
+    result = PushResult()
+
     # Stage all changes
     run_git_command(["git", "add", "."], cwd=worktree_path)
+
+    # Count changed files before committing
+    diff_names = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=worktree_path, capture_output=True, text=True,
+    )
+    result.changed_files_count = len([f for f in diff_names.stdout.strip().splitlines() if f])
 
     # Check if there are staged changes (returncode: 0=no changes, 1=changes exist, other=error)
     status = subprocess.run(
@@ -65,19 +83,32 @@ def commit_and_push_worktree(worktree_path: str, branch_name: str, commit_messag
     )
     if status.returncode == 1:  # 1 means changes are staged
         run_git_command(["git", "commit", "-m", commit_message], cwd=worktree_path)
+        result.commit_created = True
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree_path, capture_output=True, text=True,
+        )
+        result.commit_sha = sha.stdout.strip()[:12]
     elif status.returncode not in (0, 1):
         raise RuntimeError(f"git diff failed with code {status.returncode}")
 
     # Push to remote
     run_git_command(["git", "push", "-u", "origin", branch_name], cwd=worktree_path)
+    result.push_done = True
+
+    return result
 
 
-def create_github_pr(worktree_path: str, title: str, body_file: str, base: str = "main") -> None:
+def create_github_pr(worktree_path: str, title: str, body_file: str, base: str = "main") -> str:
     """
     Create a GitHub pull request using the gh CLI.
+    Returns the PR URL printed by gh (e.g. https://github.com/owner/repo/pull/42).
     """
-    subprocess.run(
+    result = subprocess.run(
         ["gh", "pr", "create", "--base", base, "--title", title, "--body-file", body_file],
         cwd=worktree_path,
         check=True,
+        capture_output=True,
+        text=True,
     )
+    return result.stdout.strip()

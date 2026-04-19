@@ -233,6 +233,83 @@ Next time a similar cluster arrives, the plan phase:
 
 ---
 
+## Monitoring
+
+### What's always logged (no setup required)
+
+Every run appends one JSON line to `.pipeline_state/cost_log.jsonl` — local only, git-ignored, never shared.
+
+```json
+{
+  "ts": "2026-04-19T10:00:00+00:00",
+  "run_id": "run_20260419_100000_a3f9c1",
+  "user_id": "zainab",
+  "cluster_id": "cluster-db-cursor-001",
+  "repo_name": "my-repo",
+  "command": "plan",
+  "runner": "agent_sdk",
+  "branch_name": "fix-cluster-db-cursor-001",
+  "memory_hit": false,
+  "success": true,
+  "error_message": null,
+  "phases": [
+    {
+      "phase": "Planning",
+      "status": "success",
+      "duration_sec": 47.3,
+      "prompt_id": "planning:9b4e57191ca0",
+      "prompt_hash": "9b4e57191ca0",
+      "cost_usd": 0.031,
+      "num_turns": 6,
+      "input_tokens": 18432,
+      "output_tokens": 2104,
+      "cache_read_tokens": 14200,
+      "cache_creation_tokens": 0,
+      "tool_counts": { "Read": 4, "Grep": 2 }
+    }
+  ],
+  "total_cost_usd": 0.031
+}
+```
+
+For `push` runs, the phase also includes git metadata:
+```json
+{
+  "phase": "Push",
+  "git_commit_created": true,
+  "git_push_done": true,
+  "pr_created": true,
+  "pr_url": "https://github.com/owner/repo/pull/42",
+  "commit_sha": "abc123def456",
+  "changed_files_count": 2,
+  "branch_pushed": "fix-cluster-db-cursor-001"
+}
+```
+
+If a run fails, the entry is still written with `"success": false` and `"error_message"` set.
+
+### Developer setup (rich terminal panels)
+
+Copy `.env.example` to `.env` and set your name:
+
+```bash
+# Windows
+copy .env.example .env
+
+# macOS / Linux
+cp .env.example .env
+```
+
+Then edit `.env`:
+```
+PIPELINE_USER=yourname
+PIPELINE_VERBOSE=1
+```
+
+With `PIPELINE_VERBOSE=1` you'll see a per-phase cost/token/cache table after each run.
+
+---
+
 ## Debug Packet Schema
 
 ```json
@@ -303,5 +380,6 @@ sentry-claude-pipeline/
 │   └── sample_debug_packet.json
 ├── memory/
 │   └── incidents.json
+├── .env.example           # Copy to .env — developer monitoring settings
 └── requirements.txt
 ```
